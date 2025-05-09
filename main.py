@@ -7,6 +7,7 @@ import os
 import httpx  # Add this at the top
 import re
 import sys
+import json
 
 # Patch stdout/stderr encoding to UTF-8 to avoid cp932 issues
 if hasattr(sys.stdout, "reconfigure"):
@@ -24,7 +25,7 @@ MAX_RESULT_BYTES = 300_000 #instead oi 1_000_000
 # Add an addition tool
 @mcp.tool()
 def add(a: int, b: int) -> int:
-    """Add two numbers"""
+    """Add two numbers."""
     return a + b
 
 

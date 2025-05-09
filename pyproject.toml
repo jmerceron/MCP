@@ -3,9 +3,14 @@ name = "mcp-for-claude"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.12"
 dependencies = [
     "mcp[cli]>=1.7.1",
+    "httpx>=1.0.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.26.0",
+    "fake-http-header>=2.1.0",
+    "pydantic>=2.0.0"
 ]
 
 [build-system]
