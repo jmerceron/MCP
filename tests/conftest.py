@@ -1,17 +1,17 @@
 import pytest
 
-# Configure asyncio defaults
+# Configure pytest markers
 def pytest_configure(config):
+    # Register asyncio marker
     config.addinivalue_line(
         "markers",
         "asyncio: mark test as an asyncio test",
     )
+    # Register tools marker
+    config.addinivalue_line(
+        "markers",
+        "tools: mark test as a tools test",
+    )
 
-@pytest.fixture(scope="session")
-def event_loop():
-    """Create an instance of the default event loop for the test session."""
-    import asyncio
-    policy = asyncio.get_event_loop_policy()
-    loop = policy.new_event_loop()
-    yield loop
-    loop.close()
+# Event loop configuration is now handled by pytest-asyncio directly
+# We don't need to define our own event_loop fixture anymore
