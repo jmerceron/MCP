@@ -21,7 +21,6 @@ NOTES_FILE = os.path.join(os.path.dirname(__file__),"julien_generated_notes.txt"
 MAX_RESULT_BYTES = 300_000 #instead oi 1_000_000 
 
 
-
 # Add an addition tool
 @mcp.tool()
 def add(a: int, b: int) -> int:
@@ -51,38 +50,141 @@ def calculate_bmi(weight_kg: float, height_m: float) -> float:
     return weight_kg / (height_m**2)
 
 
+
+#################################################
+################### WEATHER #####################
+#################################################
+
+
 # Add a way to find weather information
 @mcp.tool()
-async def fetch_weather(city: str) -> str:
-    """Fetch current weather for a city"""
-    async with httpx.AsyncClient() as client:
-        response = await client.get(f"https://api.weather.com/{city}")
-        return response.text
+async def fetch_US_weather(city: str) -> str:
+    """Fetch current weather for a US city using the National Weather Service API"""
+    headers = {
+        "User-Agent": "(MCP Weather Tool, contact@example.com)",
+        "Accept": "application/geo+json"
+    }
+    
+    try:
+        async with httpx.AsyncClient(headers=headers) as client:
+            # First get the coordinates for the location
+            points_url = f"https://api.weather.gov/points/{city}"
+            if ',' not in city:
+                return "Error: Please provide city and state in format 'City, ST' (e.g., 'Seattle, WA')"
+                
+            # Get geocoding data for the city
+            geocoding_url = f"https://geocoding.geo.census.gov/geocoder/locations/onelineaddress?address={city}&benchmark=2020&format=json"
+            geocode_response = await client.get(geocoding_url)
+            geocode_response.raise_for_status()
+            geocode_data = geocode_response.json()
+            
+            # Extract coordinates from geocoding response
+            try:
+                match = geocode_data["result"]["addressMatches"][0]
+                lat = match["coordinates"]["y"]
+                lon = match["coordinates"]["x"]
+            except (KeyError, IndexError):
+                return f"Error: Could not find coordinates for '{city}'"
+            
+            # Get the forecast office URL for these coordinates
+            points_response = await client.get(f"https://api.weather.gov/points/{lat},{lon}")
+            points_response.raise_for_status()
+            points_data = points_response.json()
+            
+            # Get the forecast
+            forecast_url = points_data["properties"]["forecast"]
+            forecast_response = await client.get(forecast_url)
+            forecast_response.raise_for_status()
+            forecast_data = forecast_response.json()
+            
+            # Get the current period's forecast
+            current_period = forecast_data["properties"]["periods"][0]
+            
+            # Format the weather information nicely
+            return f"Current weather in {city}:\n" \
+                   f"Temperature: {current_period['temperature']}°{current_period['temperatureUnit']}\n" \
+                   f"Conditions: {current_period['shortForecast']}\n" \
+                   f"Wind: {current_period['windSpeed']} {current_period['windDirection']}\n" \
+                   f"Details: {current_period['detailedForecast']}"
+                   
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 404:
+            return f"Error: Location '{city}' not found"
+        return f"Error: Weather service returned status {e.response.status_code}"
+    except httpx.RequestError as e:
+        return f"Error: Could not connect to weather service: {str(e)}"
+    except KeyError as e:
+        return f"Error: Unexpected response format from weather service: {str(e)}"
+    except Exception as e:
+        return f"Error: {type(e).__name__}: {str(e)}"
 
 
-# Add a tool to generate an image
+# Add a way to find weather information for international cities
 @mcp.tool()
-def create_thumbnail_from_image(image_path: str) -> Image:
-    """Create a thumbnail from an image"""
-    img = PILImage.open(image_path)
-    img.thumbnail((100, 100))
-    return Image(data=img.tobytes(), format="png")
+async def fetch_international_weather(city: str) -> str:
+    """Fetch current weather for any city worldwide using Open-Meteo API"""
+    try:
+        async with httpx.AsyncClient() as client:
+            # First get the coordinates using geocoding API
+            geocode_url = f"https://geocoding-api.open-meteo.com/v1/search?name={city}&count=1"
+            geocode_response = await client.get(geocode_url)
+            geocode_response.raise_for_status()
+            geocode_data = geocode_response.json()
+            
+            if not geocode_data.get("results"):
+                return f"Error: Could not find location '{city}'"
+            
+            location = geocode_data["results"][0]
+            lat = location["latitude"]
+            lon = location["longitude"]
+            
+            # Get current weather data
+            weather_url = (
+                f"https://api.open-meteo.com/v1/forecast"
+                f"?latitude={lat}&longitude={lon}"
+                f"&current=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m"
+                f"&wind_speed_unit=mph"
+                f"&temperature_unit=fahrenheit"
+            )
+            
+            weather_response = await client.get(weather_url)
+            weather_response.raise_for_status()
+            weather_data = weather_response.json()
+            
+            current = weather_data["current"]
+            
+            # Format the weather information nicely
+            return (
+                f"Current weather in {location['name']}, {location.get('country', '')}:\n"
+                f"Temperature: {current['temperature_2m']}°F\n"
+                f"Humidity: {current['relative_humidity_2m']}%\n"
+                f"Wind: {current['wind_speed_10m']} mph {_get_wind_direction(current['wind_direction_10m'])}"
+            )
+                   
+    except httpx.HTTPStatusError as e:
+        return f"Error: Weather service returned status {e.response.status_code}"
+    except httpx.RequestError as e:
+        return f"Error: Could not connect to weather service: {str(e)}"
+    except KeyError as e:
+        return f"Error: Unexpected response format from weather service: {str(e)}"
+    except Exception as e:
+        return f"Error: {type(e).__name__}: {str(e)}"
+
+def _get_wind_direction(degrees: float) -> str:
+    """Convert wind direction from degrees to cardinal direction"""
+    directions = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+                 "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+    index = round(degrees / (360 / len(directions))) % len(directions)
+    return directions[index]
 
 
-# Add a tool that read files for you and generate a context
-@mcp.tool()
-async def long_task(files: list[str], ctx: Context) -> str:
-    """Process multiple files with progress tracking"""
-    for i, file in enumerate(files):
-        ctx.info(f"Processing {file}")
-        await ctx.report_progress(i, len(files))   
-        data, mime_type = await ctx.read_resource(f"file://{file}")
-    return "Processing complete"
+
+#################################################
+################## WEB CRAWLER ##################
+#################################################
 
 
-
-
-# remove nonunicode characters
+# remove non-unicode characters
 def remove_unicode(text: str) -> str:
     """Remove non-ASCII characters from a string."""
     return re.sub(r'[^\x00-\x7F]+', '', text)
@@ -110,37 +212,81 @@ def truncate(text: str, max_bytes: int = MAX_RESULT_BYTES) -> str:
 # Add a crawl_web tool that truncates
 @mcp.tool()
 async def crawl_web_truncated(link: str) -> str:
-    """Crawl the web page and truncate the raw HTML content to fit size limits."""
+    """Crawl the web page, clean and truncate its content to fit size limits."""
     try:
         async with AsyncWebCrawler() as crawler:
             result = await crawler.arun(url=link)
             if not result or not result[0].success:
-                return f"Crawl failed: {remove_unicode(result[0].error_message)}"
-            html = result[0].html or "Crawl succeeded but no HTML returned."
-            return truncate(remove_unicode(html))
+                error_msg = getattr(result[0], 'error_message', 'Unknown error') if result else 'No result returned'
+                return f"Crawl failed: {remove_unicode(str(error_msg))}"
+            
+            # Try to get extracted content first, fall back to HTML if not available
+            content = result[0].extracted_content or result[0].html
+            if not content:
+                return "Crawl succeeded but no content was returned."
+            
+            # Clean up the content: strip HTML, remove non-unicode chars, and truncate
+            cleaned = strip_html_tags(content)  # First strip HTML tags
+            cleaned = remove_unicode(cleaned)   # Then remove non-ASCII chars
+            cleaned = cleaned.strip()           # Remove leading/trailing whitespace
+            
+            if not cleaned:
+                return "Crawl succeeded but content was empty after cleaning."
+                
+            return truncate(cleaned)  # Finally truncate to size limit
+            
     except Exception as e:
         return f"[crawl_web_truncated error] {type(e).__name__}: {remove_unicode(str(e))}"
         
 # Add a crawl_web tool that summarizes and truncates
 @mcp.tool()
 async def crawl_web_summarize_and_truncate(link: str, ctx: Context) -> str:
-    """Crawl the page, summarize its content, and truncate the result to fit size limits."""
+    """Crawl the page, clean its content, generate a summary, and truncate the result."""
     try:
         async with AsyncWebCrawler() as crawler:
             result = await crawler.arun(url=link)
             if not result or not result[0].success:
-                return f"Crawl failed: {remove_unicode(result[0].error_message)}"
+                error_msg = getattr(result[0], 'error_message', 'Unknown error') if result else 'No result returned'
+                return f"Crawl failed: {remove_unicode(str(error_msg))}"
             
-            content = result[0].extracted_content or result[0].html or ""
-            content = remove_unicode(content)
-
+            # Try to get extracted content first, fall back to HTML if not available
+            content = result[0].extracted_content or result[0].html
+            if not content:
+                return "Crawl succeeded but no content was returned."
+            
+            # Clean up the content before summarization
+            cleaned = strip_html_tags(content)  # First strip HTML tags
+            cleaned = remove_unicode(cleaned)   # Then remove non-ASCII chars
+            cleaned = cleaned.strip()           # Remove leading/trailing whitespace
+            
+            if not cleaned:
+                return "Crawl succeeded but content was empty after cleaning."
+            
+            # Truncate before sending for summarization to avoid overloading
+            truncated = truncate(cleaned, 3000)
+            
             # Generate a summary with help from the language model
-            summary = await ctx.ask_user(f"Summarize the following content:\n\n{truncate(content, 3000)}")
-            return truncate(remove_unicode(summary))
+            summary_prompt = (
+                f"Please provide a comprehensive summary of the following webpage content. "
+                f"Focus on the main points, key information, and important details:\n\n{truncated}"
+            )
+            summary = await ctx.ask_user(summary_prompt)
+            
+            if not summary:
+                return "Failed to generate summary."
+                
+            # Clean up the summary and truncate to size limit
+            cleaned_summary = remove_unicode(summary.strip())
+            return truncate(cleaned_summary)
+            
     except Exception as e:
         return f"[crawl_web_summarize_and_truncate error] {type(e).__name__}: {remove_unicode(str(e))}"
 
 
+
+#################################################
+##################### NOTES #####################
+#################################################
 
 #utility for adding notes to a file
 def ensure_file_exists():
@@ -153,41 +299,47 @@ def ensure_file_exists():
 def add_note_to_file(message: str) -> str:
     """ append a new note to a sticky note file """
     ensure_file_exists()
-#   with open(NOTES_FILE, "a") as f:
-#        f.write(message + "\n")
+    with open(NOTES_FILE, "a") as f:
+        f.write(f"{message}\n")
     return "A note was saved!"
 
-# add a tool that that can read a file
+# add a tool that can read a file
 @mcp.tool()
 def read_note_in_a_file() -> str:
     """ read the notes in a file """
     ensure_file_exists()
-#   with open(NOTES_FILE, "r") as f:
-#        content = f.read().strip()
-#    return content or "No note could be read!"
-    return "No note could be read!"
+    with open(NOTES_FILE, "r") as f:
+        content = f.read().strip()
+    return content if content else "No notes could be read!"
 
 @mcp.resource("notes://latest")
 def get_latest_notes() -> str:
     """ resource to get latest notes from a file """
     ensure_file_exists()
-#    with open(NOTES_FILE, "r") as f:
-#        lines = f.readlines()
-#    return lines[-1].strip() if lines else "No notes yet!"
-    return "No notes yet!"
-
+    try:
+        with open(NOTES_FILE, "r") as f:
+            lines = f.readlines()
+        return lines[-1].strip() if lines else "No notes yet!"
+    except Exception as e:
+        return f"Error reading notes: {str(e)}"
 
 @mcp.prompt()
 def note_summary() -> str:
     """ generate a prompt to summarize the content of a file """
     ensure_file_exists()
-#    with open(NOTES_FILE, "r") as f:
-#        content = f.reaad().strip()
-#    if not content
-#        then return "No notes yet!"
-#    return f"summarize the current notes: {content}"
-    return "please summarize the current notes"
+    try:
+        with open(NOTES_FILE, "r") as f:
+            content = f.read().strip()
+        if not content:
+            return "No notes yet!"
+        return f"Please summarize these notes:\n\n{content}"
+    except Exception as e:
+        return f"Error reading notes: {str(e)}"
 
+
+#################################################
+################## END ##########################
+#################################################
 
 # Add a dynamic greeting resource
 @mcp.resource("greeting://{name}")
